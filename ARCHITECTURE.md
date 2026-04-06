@@ -6,10 +6,12 @@
 3. [Monorepo Structure](#monorepo-structure)
 4. [Architecture Diagram](#architecture-diagram)
 5. [Key Components](#key-components)
-6. [Advanced Features](#advanced-features)
-7. [Service Layer](#service-layer)
-8. [Performance Optimizations](#performance-optimizations)
-9. [Tech Stack](#tech-stack)
+6. [Security Architecture](#security-architecture)
+7. [Advanced Features](#advanced-features)
+8. [Service Layer](#service-layer)
+9. [Performance Optimizations](#performance-optimizations)
+10. [Tech Stack](#tech-stack)
+11. [Detailed Architecture Diagrams](#detailed-architecture-diagrams)
 
 ## Overview
 
@@ -336,6 +338,8 @@ The bootstrap entrypoint with fast-path optimizations:
 - Dynamic imports for all non-fast paths
 - ~135ms savings from parallel prefetching
 
+*See detailed diagram: [docs/architecture/startup.md](docs/architecture/startup.md)*
+
 #### Main Initialization (`main.tsx`)
 Heavy initialization with parallel operations:
 
@@ -380,6 +384,8 @@ type AppState = {
 - Immutable updates via `setState(updater)`
 - Pub-sub via `subscribe(listener)`
 - Side-effects via `onChangeAppState()`
+
+*See detailed diagram: [docs/architecture/state.md](docs/architecture/state.md)*
 
 ### 3. REPL Screen (`src/screens/REPL.tsx`)
 
@@ -452,6 +458,8 @@ class QueryEngine {
 - Stop hooks for interruption
 - Error recovery
 
+*See detailed diagram: [docs/architecture/query-engine.md](docs/architecture/query-engine.md)*
+
 ### 6. Tool System (`src/tools/`)
 
 Tool interface (~794 lines):
@@ -489,6 +497,8 @@ type Tool<Input, Output, P> = {
 | LSP | LSPTool | Language server operations |
 | Skills | SkillTool | User-defined scripts |
 
+*See detailed diagram: [docs/architecture/tools.md](docs/architecture/tools.md)*
+
 ### 7. Permission System (`src/hooks/useCanUseTool.ts`)
 
 **Permission Modes:**
@@ -516,6 +526,69 @@ type ToolPermissionRulesBySource = {
 3. Check ask rules
 4. Run tool-specific `checkPermissions()`
 5. Prompt user if no rule matches (default mode)
+
+*See detailed diagrams: [docs/architecture/commands.md](docs/architecture/commands.md), [docs/architecture/security.md](docs/architecture/security.md)*
+
+## Security Architecture
+
+Claude Code implements multi-layer input sanitization and security to protect against prompt injection, Unicode exploits, and malicious tool execution.
+
+### Security Pipeline
+
+```
+User Input
+    │
+    ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Input Sanitization                                          │
+│ ├── Unicode hardening (sanitization.ts)                    │
+│ │   ├── NFKC normalization                                  │
+│ │   ├── Category filtering (Cf/Co/Cn)                       │
+│ │   └── Zero-width/RTL character removal                    │
+│ │                                                            │
+│ ├── Bridge origin validation                                │
+│ │   └── isBridgeSafeCommand() check                         │
+│ │                                                            │
+│ └── Hook output sanitization (10k char limit)               │
+└─────────────────────────────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Permission Check (3-Tier)                                   │
+│ ├── 1. Rule Matching (allow/deny/ask)                      │
+│ ├── 2. Dangerous Pattern Detection                          │
+│ │   └── Blocklist: eval, exec, sudo, ssh, kubectl           │
+│ └── 3. YOLO Classifier (auto mode only)                     │
+│     └── Secondary LLM for ambiguous cases                    │
+└─────────────────────────────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Tool Execution                                              │
+│ ├── MCP output truncation (25k tokens)                      │
+│ ├── PreToolUse / PostToolUse hooks                          │
+│ └── Trust gate enforcement                                  │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Key Security Components
+
+| Layer | File | Purpose |
+|-------|------|---------|
+| Unicode sanitization | `src/utils/sanitization.ts` | NFKC + Unicode category filtering |
+| Dangerous patterns | `src/utils/permissions/dangerousPatterns.ts` | Shell command blocklist |
+| Bridge validation | `src/commands.ts` | `isBridgeSafeCommand()` |
+| Hook execution | `src/utils/hooks.ts` | Trust gate + output limits |
+| MCP validation | `src/utils/mcpValidation.ts` | Token capping |
+| YOLO classifier | `src/utils/permissions/yoloClassifier.ts` | Auto-mode secondary LLM |
+
+### Security Gaps (Documented)
+
+- **Hook output sanitization**: Not applied to hook `additionalContext`
+- **Web API auth**: `web/app/api/*` routes lack authentication
+- **Settings integrity**: No hash verification on `settings.json`
+
+*See [prompt-harden.md](./prompt-harden.md) for detailed threat model and recommendations.*
 
 ## Advanced Features
 
@@ -716,6 +789,8 @@ Language Server Protocol integration:
 - Cost tracking
 - Usage metrics
 
+*See detailed diagram: [docs/architecture/services.md](docs/architecture/services.md)*
+
 ## Performance Optimizations
 
 ### 1. Parallel Prefetch
@@ -838,6 +913,22 @@ Read file caching:
                    │    Loop     │
                    └─────────────┘
 ```
+
+---
+
+## Detailed Architecture Diagrams
+
+For more detailed diagrams of each component, see the [docs/architecture/](docs/architecture/) directory:
+
+| Diagram | Description |
+|---------|-------------|
+| [startup.md](docs/architecture/startup.md) | CLI entry, fast paths, parallel prefetch |
+| [query-engine.md](docs/architecture/query-engine.md) | Query loop, API calls, tool execution |
+| [security.md](docs/architecture/security.md) | Input sanitization, permission checking |
+| [tools.md](docs/architecture/tools.md) | Tool system, categories, execution |
+| [commands.md](docs/architecture/commands.md) | Command system, slash commands |
+| [services.md](docs/architecture/services.md) | MCP, plugins, analytics, compact |
+| [state.md](docs/architecture/state.md) | State management, AppStateStore |
 
 ---
 
